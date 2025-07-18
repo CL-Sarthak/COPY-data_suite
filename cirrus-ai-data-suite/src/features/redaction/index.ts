@@ -1,0 +1,1 @@
+export { RedactionFeature as default } from './RedactionFeature';

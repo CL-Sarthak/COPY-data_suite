@@ -1,0 +1,25 @@
+{
+  "functions": {
+    "src/app/api/**/*.js": {
+      "maxDuration": 60
+    },
+    "src/app/api/**/*.ts": {
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    }
+  ],
+  "env": {
+    "DATABASE_SSL": "true",
+    "SKIP_RUNTIME_MIGRATIONS": "true"
+  },
+  "build": {
+    "env": {
+      "NODE_ENV": "production"
+    }
+  }
+}

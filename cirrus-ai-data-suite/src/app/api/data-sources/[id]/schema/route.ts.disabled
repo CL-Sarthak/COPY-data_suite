@@ -1,0 +1,185 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { DataSourceService } from '@/services/dataSourceService';
+import { DataSource } from '@/types/discovery';
+import { FieldMappingService } from '@/services/fieldMappingService';
+
+// GET /api/data-sources/[id]/schema - Get normalized schema for a data source
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+    console.log('=== Schema Analysis API: Starting ===', { sourceId: id });
+
+    // First try to get transformed data for field analysis
+    const catalog = await DataSourceService.getTransformedData(id);
+    
+    if (catalog) {
+      // Analyze field mappings from transformed data
+      const normalizedSchema = FieldMappingService.analyzeFieldMappings([catalog]);
+      
+      // Detect relationships
+      const relationships = FieldMappingService.detectFieldRelationships(normalizedSchema);
+      
+      console.log('=== Schema Analysis Complete ===', {
+        originalFields: catalog.schema.fields.length,
+        normalizedFields: normalizedSchema.fields.length,
+        relationships: relationships.length
+      });
+
+      return NextResponse.json({
+        sourceId: id,
+        sourceName: catalog.sourceName,
+        originalSchema: catalog.schema,
+        normalizedSchema,
+        relationships,
+        analysis: {
+          totalFields: catalog.schema.fields.length,
+          normalizedFields: normalizedSchema.fields.filter(f => f.confidence > 0.9).length,
+          customFields: normalizedSchema.fields.filter(f => f.category === 'custom').length,
+          categories: [...new Set(normalizedSchema.fields.map(f => f.category))]
+        }
+      });
+    }
+    
+    // Fallback to original schema generation if not transformed
+    const dataSource = await DataSourceService.getDataSourceById(id);
+    
+    if (!dataSource) {
+      return NextResponse.json({ error: 'Data source not found' }, { status: 404 });
+    }
+
+    // Generate a basic schema based on data source type and metadata
+    const schema = generateSchemaFromDataSource(dataSource);
+    
+    return NextResponse.json({ 
+      schema,
+      message: 'Transform this data source for advanced field analysis and normalization'
+    });
+  } catch (error) {
+    console.error('Error extracting schema from data source:', error);
+    return NextResponse.json(
+      { error: 'Failed to extract schema from data source' },
+      { status: 500 }
+    );
+  }
+}
+
+interface DataSourceField {
+  name: string;
+  type?: string;
+  primary?: boolean;
+}
+
+function generateSchemaFromDataSource(dataSource: DataSource) {
+  // Basic schema inference based on data source type and metadata
+  const baseSchema: Record<string, Record<string, unknown>> = {};
+
+  // If metadata contains table information, use it
+  if (dataSource.metadata?.tables && dataSource.metadata.tables.length > 0) {
+    // Use the first table's columns as the schema
+    const firstTable = dataSource.metadata.tables[0];
+    firstTable.columns.forEach((column) => {
+      const field: DataSourceField = {
+        name: column.name,
+        type: column.type,
+        primary: column.isPrimaryKey
+      };
+      baseSchema[column.name] = inferFieldType(field);
+    });
+  } else if (dataSource.metadata?.fields) {
+    // Handle custom fields from seed data
+    dataSource.metadata.fields.forEach((field) => {
+      const fieldDef: DataSourceField = {
+        name: field.name,
+        type: field.type,
+        primary: field.primary
+      };
+      baseSchema[field.name] = inferFieldType(fieldDef);
+    });
+  } else {
+    // Generate generic schema based on data source type
+    switch (dataSource.type) {
+      case 'database':
+        // Generate common database fields
+        baseSchema.id = { type: 'uuid' };
+        baseSchema.name = { type: 'name', subtype: 'fullName' };
+        baseSchema.email = { type: 'email' };
+        baseSchema.phone = { type: 'phone' };
+        baseSchema.created_at = { type: 'date', subtype: 'recent' };
+        break;
+        
+      case 'api':
+        // Generate common API response fields
+        baseSchema.id = { type: 'number', constraints: { min: 1, max: 10000 } };
+        baseSchema.title = { type: 'text', subtype: 'sentence' };
+        baseSchema.description = { type: 'text', subtype: 'paragraph' };
+        baseSchema.status = { type: 'text', constraints: { options: ['active', 'inactive', 'pending'] } };
+        break;
+        
+      case 'filesystem':
+        // Generate file-based fields
+        baseSchema.filename = { type: 'text', subtype: 'word' };
+        baseSchema.content = { type: 'text', subtype: 'paragraph' };
+        baseSchema.size = { type: 'number', constraints: { min: 100, max: 1000000 } };
+        baseSchema.last_modified = { type: 'date', subtype: 'past' };
+        break;
+        
+      default:
+        // Generic schema
+        baseSchema.id = { type: 'uuid' };
+        baseSchema.name = { type: 'text', subtype: 'word' };
+        baseSchema.value = { type: 'text', subtype: 'sentence' };
+        baseSchema.timestamp = { type: 'date', subtype: 'recent' };
+    }
+  }
+
+  return baseSchema;
+}
+
+function inferFieldType(field: DataSourceField) {
+  // Simple field type inference
+  const fieldName = field.name?.toLowerCase() || '';
+  const fieldType = field.type?.toLowerCase() || '';
+
+  // Email detection
+  if (fieldName.includes('email') || fieldType.includes('email')) {
+    return { type: 'email' };
+  }
+
+  // Phone detection
+  if (fieldName.includes('phone') || fieldName.includes('tel')) {
+    return { type: 'phone' };
+  }
+
+  // Name detection
+  if (fieldName.includes('name')) {
+    if (fieldName.includes('first')) return { type: 'name', subtype: 'firstName' };
+    if (fieldName.includes('last')) return { type: 'name', subtype: 'lastName' };
+    return { type: 'name', subtype: 'fullName' };
+  }
+
+  // Date detection
+  if (fieldName.includes('date') || fieldName.includes('time') || fieldType.includes('date') || fieldType.includes('timestamp')) {
+    return { type: 'date', subtype: 'recent' };
+  }
+
+  // Number detection
+  if (fieldType.includes('int') || fieldType.includes('number') || fieldType.includes('decimal') || fieldType.includes('float')) {
+    return { type: 'number', constraints: { min: 1, max: 1000 } };
+  }
+
+  // Boolean detection
+  if (fieldType.includes('bool') || fieldType.includes('bit')) {
+    return { type: 'boolean' };
+  }
+
+  // ID detection
+  if (fieldName === 'id' || fieldName.endsWith('_id')) {
+    return { type: 'uuid' };
+  }
+
+  // Default to text
+  return { type: 'text', subtype: 'sentence' };
+}

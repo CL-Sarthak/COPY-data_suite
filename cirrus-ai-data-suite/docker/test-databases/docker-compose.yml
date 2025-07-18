@@ -1,0 +1,23 @@
+services:
+  test-postgres-medical:
+    image: postgres:15-alpine
+    container_name: cirrus-test-postgres-medical
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: medical_admin
+      POSTGRES_PASSWORD: medical_test_2024
+      POSTGRES_DB: medical_records
+    volumes:
+      - ./init-scripts/medical:/docker-entrypoint-initdb.d
+      - medical_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medical_admin -d medical_records"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  medical_data:
+    name: cirrus-test-medical-data
